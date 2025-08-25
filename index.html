@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Complete Project</title>
+  <!-- Load Tailwind CSS from CDN for modern, responsive styling -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Use Inter font for a clean, modern look -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+    }
+  </style>
+</head>
+<body class="bg-gray-100 text-gray-800 p-4 min-h-screen flex items-center justify-center">
+  <!-- This is the container for the initial sign-in page -->
+  <div id="auth-container" class="bg-white p-8 rounded-xl shadow-lg w-full max-w-md text-center">
+    <h1 id="title" class="text-3xl font-bold mb-2 text-gray-900">Hello Gasim</h1>
+    <p id="info" class="text-gray-600 mb-6"></p>
+    <div id="linkwrap" class="mt-4 hidden">
+      <a id="signin" class="inline-block bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition duration-300 transform hover:scale-105 shadow-md" href="#">
+        Sign in now
+      </a>
+    </div>
+  </div>
+
+  <!-- This is the container for the task manager application, which will be shown after sign-in -->
+  <div id="app-container" class="hidden bg-white p-8 rounded-xl shadow-lg w-full max-w-lg text-center">
+      <h1 class="text-3xl font-bold mb-6 text-gray-900">Simple Task Manager</h1>
+      <!-- Task submission form -->
+      <form id="task-form" class="space-y-4">
+          <input 
+              type="text" 
+              id="taskId" 
+              placeholder="Task ID" 
+              required 
+              class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-200"
+          />
+          <input 
+              type="text" 
+              id="description" 
+              placeholder="Description" 
+              required 
+              class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-200"
+          />
+          <button 
+              type="submit"
+              class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition duration-300 transform hover:scale-105 shadow-md"
+          >
+              Create Task
+          </button>
+      </form>
+      <!-- Response message display area -->
+      <p id="response" class="mt-6 text-lg font-medium text-gray-700"></p>
+  </div>
+  
+  <script>
+    // ======== CONFIG: replace with your actual values ========
+    // IMPORTANT: Make sure the redirect URL EXACTLY matches the one configured in your Cognito App client.
+    const domain = "https://testgasim.auth.us-east-1.amazoncognito.com"; // e.g. https://gasim-auth.auth.us-east-1.amazoncognito.com
+    const clientId = "7hqcjbcv36ml6nm4pbnha9f5dt"; // from Cognito App client
+    const loginPageRedirect = "https://d140ntlyrnlf4z.cloudfront.net"; // This is the CloudFront URL
+    const s3Redirect = "https://d140ntlyrnlf4z.cloudfront.net";
+    // =========================================================
+
+    /**
+     * Constructs the Cognito login URL with all necessary parameters.
+     * @returns {string} The complete login URL.
+     */
+    function buildLoginUrl() {
+      // The `redirect_uri` must be URL-encoded to handle special characters.
+      return `${domain}/login`
+        + `?client_id=${encodeURIComponent(clientId)}`
+        + `&response_type=code`
+        + `&scope=${encodeURIComponent("openid email profile")}`
+        + `&redirect_uri=${encodeURIComponent(loginPageRedirect)}`;
+    }
+
+    // This is the AWS API Gateway endpoint URL for your task manager.
+    const apiUrl = 'https://x2i45276lj.execute-api.us-east-1.amazonaws.com/prod/tasks';
+
+    /**
+     * Initializes the application logic. This self-executing function
+     * checks for an authorization code in the URL and handles the UI accordingly.
+     */
+    (function () {
+      const params = new URLSearchParams(window.location.search);
+      const code = params.get("code");
+      const authContainer = document.getElementById("auth-container");
+      const appContainer = document.getElementById("app-container");
+
+      if (!code) {
+        // Case 1: No authorization code. This is the initial visit.
+        document.getElementById("title").textContent = "You need to sign in";
+        document.getElementById("info").textContent = "To access this page, please sign in with your account.";
+        document.getElementById("signin").href = buildLoginUrl();
+        document.getElementById("linkwrap").classList.remove("hidden");
+        authContainer.classList.remove("hidden");
+        appContainer.classList.add("hidden");
+      } else {
+        // Case 2: Authorization code is present. The user has returned from Cognito.
+        // Hide the sign-in container and show the application container.
+        authContainer.classList.add("hidden");
+        appContainer.classList.remove("hidden");
+
+        // Clean the URL so a refresh doesn't trigger a new authentication flow.
+        window.history.replaceState({}, document.title, loginPageRedirect);
+      }
+    })();
+
+    // This function handles the form submission to send data to your API.
+    document.getElementById('task-form').addEventListener('submit', async function (e) {
+        // Prevent the default form submission behavior (page reload).
+        e.preventDefault();
+
+        // Get the values from the form inputs.
+        const taskId = document.getElementById('taskId').value;
+        const description = document.getElementById('description').value;
+        
+        // Retrieve the ID token from local storage.
+        // This token is required to authenticate with your API.
+        const idToken = localStorage.getItem("id_token");
+
+        // Prepare the data to be sent in the request body.
+        const requestBody = JSON.stringify({ taskId, description });
+
+        // Prepare the headers, including the Authorization header with the ID token.
+        const headers = {
+            'Content-Type': 'application/json',
+            // Conditionally add the Authorization header if an ID token exists.
+            ...(idToken && { Authorization: `Bearer ${idToken}` })
+        };
+
+        // Display a temporary loading message.
+        document.getElementById('response').innerText = 'Creating task...';
+
+        try {
+            // Make the POST request to your API endpoint.
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: headers,
+                body: requestBody
+            });
+
+            // Parse the JSON response from the API.
+            const data = await response.json();
+            
+            // Display the message from the API, which can be a success or error message.
+            document.getElementById('response').innerText = data.message || data.error || 'Unknown response from API.';
+        } catch (error) {
+            // Handle any network or fetch-related errors.
+            console.error('Error creating task:', error);
+            document.getElementById('response').innerText = 'Failed to connect to the API. Please try again later.';
+        }
+    });
+  </script>
+</body>
+</html>
